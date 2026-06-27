@@ -1,479 +1,468 @@
-export default {
-  async fetch(request, env) {
-    const BOT_TOKEN = "8947026755:AAHsXbmvOJ8LbArDdHAo_qj6glBW_R4UFc4";
-    const ADMIN_ID = 7455286945;
-    const ADMIN_USERNAME = "@mybmyb00";
-    const CHANNEL_ID = "@MYB_studio";
-    const TG = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const BOT_TOKEN = "8947026755:AAHsXbmvOJ8LbArDdHAo_qj6glBW_R4UFc4";
+const ADMIN_ID = 7455286945;
+const ADMIN_USERNAME = "@mybmyb00";
+const CHANNEL_ID = "@MYB_studio";
+const CHANNEL_LINK = "https://t.me/MYB_studio";
+const WORKER_DOMAIN = "still-mud-2f7d.y1361255.workers.dev";
+const CARD_NUMBER = "6219-8619-5865-8238";
+const CARD_NAME = "به نام یاسین";
 
-    // حافظه موقت کلاودفلر (KV نیست، اما برای ذخیره موقت مراحل لوکیشن کاربر در لحظه خرید کار میکنه)
-    // برای پایداری بیشتر، متغیرها در سطح گلوبال یا استیت نگه داشته میشوند.
-    if (!globalThis.userSelection) {
-      globalThis.userSelection = {};
-    }
+const BASE_PRICES = {
+  "10GB": 35000,
+  "20GB": 60000,
+  "30GB": 90000,
+  "50GB/1M": 150000,
+  "50GB/2M": 170000,
+  "100GB": 320000,
+  "Unlimited/20D": 150000,
+  "Unlimited/1M": 190000,
+  "Unlimited/2M": 350000,
+  "Unlimited/3M": 490000,
+};
 
-    const sendMessage = async (chat_id, text, extra = {}) => {
-      return fetch(`${TG}/sendMessage`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          chat_id,
-          text,
-          parse_mode: "Markdown",
-          ...extra,
-        }),
-      });
-    };
+const STATIC_LOCATIONS = [
+  "USA-Virginia",
+  "USA-California",
+  "Netherlands-Amsterdam",
+  "Singapore",
+];
 
-    const editMessageText = async (chat_id, message_id, text, extra = {}) => {
-      return fetch(`${TG}/editMessageText`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          chat_id,
-          message_id,
-          text,
-          parse_mode: "Markdown",
-          ...extra,
-        }),
-      });
-    };
+const LOCATION_FLAGS = {
+  "USA-Virginia": "🇺🇸",
+  "USA-California": "🇺🇸",
+  "Netherlands-Amsterdam": "🇳🇱",
+  "Singapore": "🇸🇬",
+};
 
-    const sendPhoto = async (chat_id, photo, caption, extra = {}) => {
-      return fetch(`${TG}/sendPhoto`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          chat_id,
-          photo,
-          caption,
-          parse_mode: "Markdown",
-          ...extra,
-        }),
-      });
-    };
+// نگهداری سشن کاربران و ادمین
+const userSessions = new Map();
 
-    const answerCallbackQuery = async (callback_query_id, text = "", show_alert = false) => {
-      return fetch(`${TG}/answerCallbackQuery`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          callback_query_id,
-          text,
-          show_alert
-        }),
-      });
-    };
+const api = (method, body) =>
+  fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((r) => r.json());
 
-    const checkChannelMembership = async (user_id) => {
-      try {
-        const res = await fetch(`${TG}/getChatMember?chat_id=${CHANNEL_ID}&user_id=${user_id}`);
-        const data = await res.json();
-        if (data.ok && data.result) {
-          const status = data.result.status;
-          return ["member", "administrator", "creator"].includes(status);
-        }
-        return false;
-      } catch (e) {
-        return false;
-      }
-    };
+const sendMsg = (chatId, text, extra = {}) =>
+  api("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", ...extra });
 
-    // منوی اصلی جدید یاسین
-    const mainKeyboard = {
-      keyboard: [
-        [{ text: "🛒 خرید سرویس جدید" }],
-        [{ text: "⚡ تست رایگان" }, { text: "💡 آموزش اتصال" }],
-        [{ text: "📞 پشتیبانی و ارسال رسید" }],
+const editMsg = (chatId, messageId, text, extra = {}) =>
+  api("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: "HTML",
+    ...extra,
+  });
+
+const answerCb = (id, text = "") =>
+  api("answerCallbackQuery", { callback_query_id: id, text });
+
+const getMember = (chatId, userId) =>
+  api("getChatMember", { chat_id: chatId, user_id: userId });
+
+const forwardMsg = (toChatId, fromChatId, messageId) =>
+  api("forwardMessage", {
+    chat_id: toChatId,
+    from_chat_id: fromChatId,
+    message_id: messageId,
+  });
+
+const fmtPrice = (n) => n.toLocaleString("en-US");
+
+const formatServiceName = (type, location, volume) => {
+  const t = type === "normal" ? "Normal" : "Static";
+  const l = location === "Germany" ? "Germany" : location;
+  return `Silent-${t}-${l}-${volume}`;
+};
+
+const keyboards = {
+  joinChannel: () => ({
+    reply_markup: JSON.stringify({
+      inline_keyboard: [
+        [{ text: "🔗 عضویت در کانال", url: CHANNEL_LINK }],
+        [{ text: "✅ تایید عضویت و ورود به ربات", callback_data: "verify_member" }],
       ],
-      resize_keyboard: true,
-      one_time_keyboard: false,
-    };
-
-    const backKeyboard = {
-      keyboard: [[{ text: "🔙 بازگشت به منوی اصلی" }]],
-      resize_keyboard: true,
-      one_time_keyboard: false,
-    };
-
-    const joinInlineKeyboard = {
+    }),
+  }),
+  mainMenu: () => ({
+    reply_markup: JSON.stringify({
       inline_keyboard: [
-        [{ text: "📢 ورود به کانال سایلنت وی‌پی‌ان", url: `https://t.me/MYB_studio` }],
-        [{ text: "✅ تایید عضویت و ورود به ربات", callback_data: "check_join" }]
-      ]
-    };
-
-    // کیبورد انتخاب لوکیشن / کشورها
-    const countryKeyboard = {
+        [{ text: "🛒 خرید سرویس جدید", callback_data: "buy_new" }],
+      ],
+    }),
+  }),
+  serviceType: () => ({
+    reply_markup: JSON.stringify({
       inline_keyboard: [
-        [{ text: "🇺🇸 آمریکا - ویرجینیا", callback_data: "set_country:USA-Virginia" }],
-        [{ text: "🇺🇸 آمریکا - کالیفرنیا", callback_data: "set_country:USA-California" }],
-        [{ text: "🇳🇱 هلند - آمستردام", callback_data: "set_country:Netherlands-Amsterdam" }],
-        [{ text: "🇸🇬 سنگاپور", callback_data: "set_country:Singapore" }]
-      ]
+        [{ text: "🇩🇪 سرویس معمولی (آلمان - آی‌پی متغیر)", callback_data: "type_normal" }],
+        [{ text: "🌐 سرویس‌های آی‌پی ثابت", callback_data: "type_static" }],
+      ],
+    }),
+  }),
+  staticLocations: () => ({
+    reply_markup: JSON.stringify({
+      inline_keyboard: STATIC_LOCATIONS.map((loc) => [
+        { text: `${LOCATION_FLAGS[loc]} ${loc}`, callback_data: `loc_${loc}` },
+      ]),
+    }),
+  }),
+  volumeSelection: (serviceType) => {
+    const volumeTranslations = {
+      "10GB": "۱۰ گیگابایت (۱ ماهه)",
+      "20GB": "۲۰ گیگابایت (۱ ماهه)",
+      "30GB": "۳۰ گیگابایت (۱ ماهه)",
+      "50GB/1M": "۵۰ گیگابایت (۱ ماهه)",
+      "50GB/2M": "۵۰ گیگابایت (۲ ماهه)",
+      "100GB": "۱۰۰ گیگابایت (۲ ماهه)",
+      "Unlimited/20D": "نامحدود (۲۰ روزه)",
+      "Unlimited/1M": "نامحدود (۱ ماهه)",
+      "Unlimited/2M": "نامحدود (۲ ماهه)",
+      "Unlimited/3M": "نامحدود (۳ ماهه)"
     };
 
-    // کیبورد انتخاب حجم‌ها (هر حجم یک دکمه مجزا)
-    const volumeKeyboard = {
+    const rows = Object.entries(BASE_PRICES).map(([vol, base]) => {
+      const price = serviceType === "static" ? Math.round(base * 1.1) : base;
+      const textFarsi = volumeTranslations[vol] || vol;
+      return [{ text: `${textFarsi} — ${fmtPrice(price)} تومان`, callback_data: `vol_${vol}` }];
+    });
+    rows.push([{ text: "🔙 بازگشت", callback_data: "back_main" }]);
+    return { reply_markup: JSON.stringify({ inline_keyboard: rows }) };
+  },
+  adminAction: (userId, serviceName) => ({
+    reply_markup: JSON.stringify({
       inline_keyboard: [
-        [{ text: "💾 اکانت ۱۰ گیگابایت (۱ ماهه) - ۳۵,۰۰۰ تومان", callback_data: "set_vol:10GB-1M" }],
-        [{ text: "💾 اکانت ۲۰ گیگابایت (۱ ماهه) - ۶۰,۰۰0 تومان", callback_data: "set_vol:20GB-1M" }],
-        [{ text: "💾 اکانت ۳۰ گیگابایت (۱ ماهه) - ۹۰,۰۰۰ تومان", callback_data: "set_vol:30GB-1M" }],
-        [{ text: "💾 اکانت ۵۰ گیگابایت (۱ ماهه) - ۱۵۰,۰۰0 تومان", callback_data: "set_vol:50GB-1M" }],
-        [{ text: "💾 اکانت ۵۰ گیگابایت (۲ ماهه) - ۱۷۰,۰۰0 تومان", callback_data: "set_vol:50GB-2M" }],
-        [{ text: "💾 اکانت ۱۰۰ گیگابایت (۲ ماهه) - ۳۲۰,۰۰0 تومان", callback_data: "set_vol:100GB-2M" }],
-        [{ text: "♾️ اکانت نامحدود (۲۰ روزه) - ۱۵۰,۰۰۰ تومان", callback_data: "set_vol:Unlimited-20D" }],
-        [{ text: "♾️ اکانت نامحدود (۱ ماهه) - ۱۹۰,۰۰۰ تومان", callback_data: "set_vol:Unlimited-1M" }],
-        [{ text: "♾️ اکانت نامحدود (۲ ماهه) - ۳۵۰,۰۰۰ تومان", callback_data: "set_vol:Unlimited-2M" }],
-        [{ text: "♾️ اکانت نامحدود (۳ ماهه) - ۴۹۰,۰۰۰ تومان", callback_data: "set_vol:Unlimited-3M" }]
-      ]
-    };
+        [
+          { text: "✅ تایید و ارسال کانفیگ دستی", callback_data: `ap:${userId}:${encodeURIComponent(serviceName)}` },
+          { text: "❌ رد سرویس", callback_data: `rj_${userId}` },
+        ],
+      ],
+    }),
+  }),
+};
 
-    const platformKeyboard = {
-      inline_keyboard: [
-        [{ text: "🤖 اندروید (Android)", callback_data: "guide_android" }],
-        [{ text: "🪟 ویندوز (Windows)", callback_data: "guide_windows" }],
-        [{ text: "🍎 آیفون (iOS)", callback_data: "guide_ios" }],
-        [{ text: "💻 مک (macOS)", callback_data: "guide_macos" }]
-      ]
-    };
+async function handleStart(chatId, userId) {
+  const res = await getMember(CHANNEL_ID, userId);
+  const status = res.result?.status;
+  const isMember = ["member", "administrator", "creator"].includes(status);
 
-    const warningText = `\n\n⚠️ **نکته بسیار مهم:** لطفا فقط از نرم‌افزارهای پیشنهادی فوق استفاده کنید. در صورت استفاده از برنامه‌های متفرقه دیگر، ما هیچ مسئولیتی را گردن نمی‌گیریم!`;
+  if (!isMember && userId !== ADMIN_ID) {
+    await sendMsg(
+      chatId,
+      "⚠️ لطفاً ابتدا در کانال ما عضو شید سپس دکمه تایید را بزنید:",
+      keyboards.joinChannel()
+    );
+    return;
+  }
 
-    try {
-      if (request.method !== "POST") return new Response("OK");
-      const update = await request.json();
+  userSessions.set(userId, { step: "main_menu" });
+  await sendMsg(chatId, "🎉 به ربات خوش آمدید!", keyboards.mainMenu());
+}
 
-      if (update.message) {
-        const msg = update.message;
-        const chatId = msg.chat?.id;
-        const userId = msg.from?.id;
-        const text = msg.text || "";
+async function handleVerifyMember(chatId, userId, messageId) {
+  const res = await getMember(CHANNEL_ID, userId);
+  const status = res.result?.status;
+  const isMember = ["member", "administrator", "creator"].includes(status);
 
-        if (userId !== ADMIN_ID) {
-          const isMember = await checkChannelMembership(userId);
-          if (!isMember) {
-            await sendMessage(
-              chatId,
-              `⚠️ **رفیق برای استفاده از ربات، اول باید عضو کانال ما بشی!**\n\nعضویت شما باعث دلگرمی ماست و اخبار قطعی یا کانفیگ‌های جدید رو اونجا می‌ذاریم.👇`,
-              { reply_markup: joinInlineKeyboard }
-            );
-            return new Response("OK");
-          }
-        }
+  if (!isMember) {
+    await answerCb("❌ هنوز عضو نشدید! لطفاً ابتدا عضو شید.");
+    return;
+  }
 
-        // منوی ارسال رسید با دریافت لوکیشن و حجم مشخص شده
-        if (msg.photo && msg.photo.length > 0) {
-          const bestPhoto = msg.photo[msg.photo.length - 1];
-          
-          // خواندن لوکیشن و حجمی که کاربر دکمه‌اش رو زده بود
-          const session = globalThis.userSelection[userId] || { country: "نامشخص", volume: "نامشخص" };
-          const serviceName = `Silent-${session.country}-${session.volume}`;
+  await editMsg(chatId, messageId, "✅ عضویت تایید شد!");
+  userSessions.set(userId, { step: "main_menu" });
+  await sendMsg(chatId, "🎉 به ربات خوش آمدید!", keyboards.mainMenu());
+}
 
-          await sendPhoto(
-            ADMIN_ID,
-            bestPhoto.file_id,
-            `🧾 *رسید جدید دریافت شد (لیست کامل مشخصات سفارش)*\n\n` +
-            `👤 کاربر: \`${userId}\`\n` +
-            `💬 چت‌آیدی: \`${chatId}\`\n` +
-            `📍 کشور/لوکیشن خریدار: *${session.country}*\n` +
-            `💾 حجم درخواستی: *${session.volume}*\n` +
-            `🏷️ نام پیشنهادی سرویس: \`${serviceName}\`\n\n` +
-            `برای تایید یا رد، از دکمه‌های زیر استفاده کن.`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    { text: "✅ تایید", callback_data: `approve:${chatId}:${serviceName}` },
-                    { text: "❌ رد سرویس", callback_data: `reject:${chatId}:${serviceName}` },
-                  ],
-                ],
-              },
-            }
-          );
+async function handleBuyNew(chatId, userId, messageId) {
+  userSessions.set(userId, { step: "choose_type" });
+  await editMsg(chatId, messageId, "🌍 نوع سرویس مورد نظر را انتخاب کنید:", keyboards.serviceType());
+}
 
-          await sendMessage(chatId, "عالیه رفیق ✅\nرسیدت دریافت شد و برای بررسی فرستاده شد.");
-          return new Response("OK");
-        }
+async function handleServiceType(chatId, userId, messageId, type) {
+  if (type === "normal") {
+    userSessions.set(userId, { step: "choose_volume", serviceType: "normal", location: "Germany" });
+    await editMsg(
+      chatId,
+      messageId,
+      "📦 حجم سرویس معمولی (آلمان) را انتخاب کنید:",
+      keyboards.volumeSelection("normal")
+    );
+  } else {
+    userSessions.set(userId, { step: "choose_static_location", serviceType: "static" });
+    await editMsg(chatId, messageId, "🌍 موقعیت سرویس آی‌پی ثابت را انتخاب کنید:", keyboards.staticLocations());
+  }
+}
 
-        if (text.startsWith("/start") || text === "🔙 بازگشت به منوی اصلی") {
-          await sendMessage(
-            chatId,
-            "سلام رفیق 👋\nبه ربات خرید سرویس خوش اومدی.\n\nاز منو یکی رو انتخاب کن:",
-            { reply_markup: mainKeyboard }
-          );
-          return new Response("OK");
-        }
+async function handleLocation(chatId, userId, messageId, location) {
+  userSessions.set(userId, { step: "choose_volume", serviceType: "static", location });
+  await editMsg(
+    chatId,
+    messageId,
+    `📦 حجم سرویس آی‌پی ثابت (${location}) را انتخاب کنید:`,
+    keyboards.volumeSelection("static")
+  );
+}
 
-        // بخش جدید: زدن دکمه خرید سرویس و پرسیدن کشور
-        if (text === "🛒 خرید سرویس جدید") {
-          globalThis.userSelection[userId] = { country: "نامشخص", volume: "نامشخص" };
-          await sendMessage(chatId, "🌐 **مرحله اول: لطفاً کشور و لوکیشن مورد نظرت رو انتخاب کن:**", {
-            reply_markup: countryKeyboard
-          });
-          return new Response("OK");
-        }
+async function handleVolume(chatId, userId, messageId, volume) {
+  const session = userSessions.get(userId);
+  if (!session) return;
 
-        if (text === "💡 آموزش اتصال") {
-          await sendMessage(chatId, "📱 **لطفاً پلتفرم یا سیستم‌عامل خودت رو انتخاب کن:**", {
-            reply_markup: platformKeyboard
-          });
-          return new Response("OK");
-        }
+  const basePrice = BASE_PRICES[volume];
+  if (!basePrice) return;
 
-        if (text === "⚡ تست رایگان") {
-          await sendMessage(
-            chatId,
-            `⚡ *تست رایگان*\n\n🧪 برای اطمینان از سرعت و کیفیت، اکانت تست با اعتبار محدود موجود است.\n\n📩 جهت دریافت تست به پیام دهید:\n🆔 ${ADMIN_USERNAME}`,
-            { reply_markup: backKeyboard }
-          );
-          return new Response("OK");
-        }
+  const price = session.serviceType === "static" ? Math.round(basePrice * 1.1) : basePrice;
+  const serviceName = formatServiceName(session.serviceType, session.location, volume);
 
-        if (text === "📞 پشتیبانی و ارسال رسید") {
-          await sendMessage(
-            chatId,
-            `📞 *پشتیبانی*\n\nپیام‌ها یا سوالاتت رو همینجا بفرست.\nادمین پشتیبانی: ${ADMIN_USERNAME}`,
-            { reply_markup: backKeyboard }
-          );
-          return new Response("OK");
-        }
+  session.step = "awaiting_receipt";
+  session.volume = volume;
+  session.price = price;
+  session.serviceName = serviceName;
 
-        if (text.startsWith("ارسال:") && userId === ADMIN_ID) {
-          const parts = text.split(":");
-          const targetChatId = parts[1];
-          const configText = parts.slice(2).join(":");
+  const volumeTranslations = {
+    "10GB": "۱۰ گیگابایت (۱ ماهه)",
+    "20GB": "۲۰ گیگابایت (۱ ماهه)",
+    "30GB": "۳۰ گیگابایت (۱ ماهه)",
+    "50GB/1M": "۵۰ گیگابایت (۱ ماهه)",
+    "50GB/2M": "۵۰ گیگابایت (۲ ماهه)",
+    "100GB": "۱۰۰ گیگابایت (۲ ماهه)",
+    "Unlimited/20D": "نامحدود (۲۰ روزه)",
+    "Unlimited/1M": "نامحدود (۱ ماهه)",
+    "Unlimited/2M": "نامحدود (۲ ماهه)",
+    "Unlimited/3M": "نامحدود (۳ ماهه)"
+  };
 
-          if (targetChatId && configText) {
-            await sendMessage(
-              targetChatId,
-              `✅ *سرویس شما آماده شد*\n\nکانفیگ:\n\`\`\`\n${configText}\n\`\`\``
-            );
-            await sendMessage(
-              ADMIN_ID,
-              `ارسال شد به \`${targetChatId}\`\n\nدستور استفاده شد:\n\`ارسال:${targetChatId}:کانفیگ\``
-            );
-          } else {
-            await sendMessage(ADMIN_ID, "❌ فرمت دستور درست نیست.\n\nفرمت صحیح:\n`ارسال:چت‌آیدی:کانفیگ`");
-          }
-          return new Response("OK");
-        }
+  const نوعسرویس = session.serviceType === "normal" ? "معمولی (آلمان - آی‌پي متغیر)" : "آی‌پی ثابت";
+  const موقعیتسرویس = session.location === "Germany" ? "آلمان" : session.location;
+  const حجمفارسی = volumeTranslations[volume] || volume;
 
-        return new Response("OK");
+  const invoiceText = [
+    `🧾 <b>فاکتور خرید سرویس</b>`,
+    ``,
+    `📦 نام فنی سرویس: <code>${serviceName}</code>`,
+    `🌍 نوع سرویس: <b>${نوعسرویس}</b>`,
+    `📍 موقعیت سرور: <b>${موقعیتسرویس}</b>`,
+    `💾 حجم اکانت: <b>${حجمفارسی}</b>`,
+    `💰 مبلغ قابل پرداخت: <b>${fmtPrice(price)} تومان</b>`,
+    ``,
+    `💳 شماره کارت جهت واریز: <code>${CARD_NUMBER}</code>`,
+    `👤 ${CARD_NAME}`,
+    ``,
+    `📸 لطفاً پس از واریز، تصویر فیش (رسید) خود را در همین‌جا ارسال کنید:`,
+  ].join("\n");
+
+  await editMsg(chatId, messageId, invoiceText);
+}
+
+async function handleReceipt(chatId, userId, messageId, photo) {
+  const session = userSessions.get(userId);
+  if (!session || session.step !== "awaiting_receipt") return;
+
+  session.step = "done";
+
+  const caption = [
+    `🧾 <b>درخواست خرید جدید</b>`,
+    ``,
+    `👤 User ID: <code>${userId}</code>`,
+    `💬 Chat ID: <code>${chatId}</code>`,
+    `📦 نام سرویس: <code>${session.serviceName}</code>`,
+    `🌍 نوع: ${session.serviceType === "normal" ? "معمولی" : "آی‌پی ثابت"}`,
+    `📍 موقعیت: ${session.location}`,
+    `💾 حجم: ${session.volume}`,
+    `💰 مبلغ: ${fmtPrice(session.price)} تومان`,
+  ].join("\n");
+
+  await forwardMsg(ADMIN_ID, chatId, messageId);
+  await sendMsg(ADMIN_ID, caption, keyboards.adminAction(userId, session.serviceName));
+  await sendMsg(chatId, "✅ فیش واریزی شما به ادمین ارسال شد. لطفاً منتظر تایید باشید.");
+}
+
+// وقتی ادمین دکمه تایید رو می‌زنه، ربات فقط وضعیت ادمین رو منتظر گرفتن متن کانفیگ می‌کنه
+async function handleApprove(chatId, messageId, buyerId, serviceName) {
+  // ۱. تغییر وضعیت ادمین برای دریافت کانفیگ دستی
+  userSessions.set(ADMIN_ID, {
+    step: "admin_entering_config",
+    buyerId: buyerId,
+    serviceName: serviceName,
+  });
+
+  // ۲. فرستادن پیام راهنما به ادمین
+  await editMsg(
+    chatId,
+    messageId,
+    `✍️ <b>رسید کاربر تایید شد!</b>\n\nحالا لطفاً متن کانفیگ دستی (شامل لینک ساب و کانفیگ VLESS) را در یک پیام بنویسید و همینجا ارسال کنید تا برای خریدار ارسال شود:\n\n👤 یوزرآیدی خریدار: <code>${buyerId}</code>\n📦 سرویس: <code>${serviceName}</code>`
+  );
+}
+
+async function handleReject(chatId, messageId, buyerId) {
+  await sendMsg(buyerId, "❌ متأسفانه سفارش شما به دلیل عدم تایید فیش واریزی رد شد. لطفاً در صورت وجود مشکل با پشتیبانی در ارتباط باشید.");
+  await editMsg(chatId, messageId, `❌ سرویس کاربر ${buyerId} رد شد.`);
+  userSessions.delete(buyerId);
+}
+
+async function handleMessage(msg) {
+  const chatId = msg.chat.id;
+  const userId = msg.from?.id;
+  const text = msg.text;
+
+  if (text === "/start") {
+    await handleStart(chatId, userId);
+    return;
+  }
+
+  // بررسی وضعیت ادمین برای ارسال دستی کانفیگ
+  if (userId === ADMIN_ID) {
+    const adminSession = userSessions.get(ADMIN_ID);
+    if (adminSession && adminSession.step === "admin_entering_config") {
+      const buyerId = adminSession.buyerId;
+      const sName = adminSession.serviceName;
+
+      if (!text) {
+        await sendMsg(ADMIN_ID, "⚠️ لطفاً کانفیگ را به صورت متن ارسال کنید.");
+        return;
       }
 
-      if (update.callback_query) {
-        const cq = update.callback_query;
-        const data = cq.data || "";
-        const callbackId = cq.id;
-        const fromId = cq.from?.id;
-        const messageId = cq.message?.message_id;
-        const chatId = cq.message?.chat?.id;
+      // فرستادن متن دقیق ادمین برای مشتری
+      await sendMsg(buyerId, text);
+      
+      // مطلع کردن خریدار از تایید نهایی
+      await sendMsg(buyerId, `✅ سرویس شما با موفقیت فعال شد و اطلاعات بالا متعلق به اکانت شماست.`);
 
-        // ذخیره کشور انتخاب شده و بردن کاربر به مرحله انتخاب حجم
-        if (data.startsWith("set_country:")) {
-          const country = data.split(":")[1];
-          if (!globalThis.userSelection[fromId]) globalThis.userSelection[fromId] = {};
-          globalThis.userSelection[fromId].country = country;
-
-          await answerCallbackQuery(callbackId, `لوکیشن ${country} انتخاب شد.`);
-          await editMessageText(chatId, messageId, `📍 لوکیشن انتخاب شده: *${country}*\n\n💾 **مرحله دوم: حالا حجم اکانت مد نظرت رو انتخاب کن:**`, {
-            reply_markup: volumeKeyboard
-          });
-          return new Response("OK");
-        }
-
-        // ذخیره حجم انتخاب شده و نمایش کارت و راهنمای واریز به کاربر
-        if (data.startsWith("set_vol:")) {
-          const volume = data.split(":")[1];
-          if (!globalThis.userSelection[fromId]) globalThis.userSelection[fromId] = {};
-          globalThis.userSelection[fromId].volume = volume;
-
-          await answerCallbackQuery(callbackId, "حجم ثبت شد.");
-          
-          const country = globalThis.userSelection[fromId].country || "نامشخص";
-          const invoiceText = `🌐✨ **سرویس سوپر استارلینک**\n\n` +
-            `📍 لوکیشن انتخابی شما: *${country}*\n` +
-            `💾 حجم انتخابی شما: *${volume}*\n\n` +
-            `⏳📈 *فروش با این قیمت‌های پایین محدوده و ظرف یک هفته آینده افزایش قیمت خواهد داشت.*\n\n` +
-            `💳 **شماره کارت واریز:**\n\`6219-8619-5865-8238\`\nبه نام یاسین\n\n` +
-            `👇 **حالا لطفاً عکس رسید واریز خودت رو همینجا بفرست تا سرویس برات صادر بشه.**`;
-
-          await editMessageText(chatId, messageId, invoiceText);
-          await sendMessage(chatId, "منتظر ارسال رسیدت هستیم... 👇", { reply_markup: backKeyboard });
-          return new Response("OK");
-        }
-
-        if (data === "back_to_platforms") {
-          await answerCallbackQuery(callbackId);
-          await editMessageText(chatId, messageId, "📱 **لطفاً پلتفرم یا سیستم‌عامل خودت رو انتخاب کن:**", {
-            reply_markup: platformKeyboard
-          });
-          return new Response("OK");
-        }
-
-        if (data === "guide_android") {
-          await answerCallbackQuery(callbackId);
-          const text = `🤖 **کلاینت‌های پیشنهادی اندروید (Android):**` + warningText;
-          await editMessageText(chatId, messageId, text, {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "📥 دانلود v2rayNG", url: "https://github.com/2dust/v2rayNG/releases" }, { text: "📖 آموزش v2rayNG", callback_data: "learn_v2rayng" }],
-                [{ text: "📥 دانلود Hiddify", url: "https://github.com/hiddify/hiddify-next/releases" }, { text: "📖 آموزش Hiddify", callback_data: "learn_hiddify" }],
-                [{ text: "📥 دانلود NekoBox", url: "https://github.com/MatsuriDayo/NekoBoxForAndroid/releases" }, { text: "📖 آموزش NekoBox", callback_data: "learn_nekobox" }],
-                [{ text: "🔙 بازگشت", callback_data: "back_to_platforms" }]
-              ]
-            }
-          });
-          return new Response("OK");
-        }
-
-        if (data === "guide_windows") {
-          await answerCallbackQuery(callbackId);
-          const text = `🪟 **کلاینت‌های پیشنهادی ویندوز (Windows):**` + warningText;
-          await editMessageText(chatId, messageId, text, {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "📥 دانلود v2rayN", url: "https://github.com/2dust/v2rayN/releases" }, { text: "📖 آموزش v2rayN", callback_data: "learn_v2rayn" }],
-                [{ text: "📥 دانلود Hiddify", url: "https://github.com/hiddify/hiddify-next/releases" }, { text: "📖 آموزش Hiddify", callback_data: "learn_hiddify" }],
-                [{ text: "📥 دانلود Clash Verge", url: "https://github.com/clash-verge-rev/clash-verge-rev/releases" }, { text: "📖 آموزش Clash Verge", callback_data: "learn_clash" }],
-                [{ text: "🔙 بازگشت", callback_data: "back_to_platforms" }]
-              ]
-            }
-          });
-          return new Response("OK");
-        }
-
-        if (data === "guide_ios") {
-          await answerCallbackQuery(callbackId);
-          const text = `🍎 **کلاینت‌های پیشنهادی آیفون (iOS):**\n\n*(برنامه‌های آیفون در اپ‌استور هستند)*` + warningText;
-          await editMessageText(chatId, messageId, text, {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "🍏 Shadowrocket", url: "https://apps.apple.com/us/app/shadowrocket/id932747118" }, { text: "📖 آموزش", callback_data: "learn_shadowrocket" }],
-                [{ text: "🍏 Streisand", url: "https://apps.apple.com/us/app/streisand/id6450534064" }, { text: "📖 آموزش", callback_data: "learn_streisand" }],
-                [{ text: "🍏 Stash", url: "https://apps.apple.com/us/app/stash-rule-based-proxy-client/id1596063349" }, { text: "📖 آموزش", callback_data: "learn_stash" }],
-                [{ text: "🔙 بازگشت", callback_data: "back_to_platforms" }]
-              ]
-            }
-          });
-          return new Response("OK");
-        }
-
-        if (data === "guide_macos") {
-          await answerCallbackQuery(callbackId);
-          const text = `💻 **کلاینت‌های پیشنهادی مک (macOS):**` + warningText;
-          await editMessageText(chatId, messageId, text, {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "📥 دانلود Clash Verge", url: "https://github.com/clash-verge-rev/clash-verge-rev/releases" }, { text: "📖 آموزش Clash Verge", callback_data: "learn_clash" }],
-                [{ text: "📥 دانلود Hiddify", url: "https://github.com/hiddify/hiddify-next/releases" }, { text: "📖 آموزش Hiddify", callback_data: "learn_hiddify" }],
-                [{ text: "🔙 بازگشت", callback_data: "back_to_platforms" }]
-              ]
-            }
-          });
-          return new Response("OK");
-        }
-
-        if (data === "learn_v2rayng") {
-          await answerCallbackQuery(callbackId);
-          await editMessageText(chatId, messageId, `📖 **آموزش اتصال با v2rayNG (اندروید):**\n\n۱. کانفیگ خود را کامل کپی کنید.\n۲. وارد برنامه شده و روی علامت + بالای صفحه بزنید.\n۳. گزینه **Import config from Clipboard** را انتخاب کنید.\n۴. روی کانفیگ اضافه شده بزنید و دکمه دایره‌ای پایین صفحه را لمس کنید تا متصل شوید. 🚀`, {
-            reply_markup: { inline_keyboard: [[{ text: "🔙 بازگشت به منو", callback_data: "guide_android" }]] }
-          });
-          return new Response("OK");
-        }
-
-        if (data === "learn_hiddify") {
-          await answerCallbackQuery(callbackId);
-          await editMessageText(chatId, messageId, `📖 **آموزش اتصال با Hiddify (همه پلتفرم‌ها):**\n\n۱. کانفیگ را کپی کنید.\n۲. برنامه هیدیفای را باز کرده و دکمه **➕ افزودن کانفیگ** یا (New Profile) را بزنید.\n۳. گزینه **افزودن از حافظه موقت (Clipboard)** را انتخاب کنید.\n۴. دکمه دایره بزرگ وسط صفحه را بزنید تا سبز و متصل شود. 🔥`, {
-            reply_markup: { inline_keyboard: [[{ text: "🔙 بازگشت به منوی اصلی پلتفرم‌ها", callback_data: "back_to_platforms" }]] }
-          });
-          return new Response("OK");
-        }
-
-        if (data === "learn_nekobox") {
-          await answerCallbackQuery(callbackId);
-          await editMessageText(chatId, messageId, `📖 **آموزش اتصال با NekoBox (اندروید):**\n\n۱. کانفیگ را کپی کنید.\n۲. وارد برنامه شوید و علامت آیکون کاغذ/پلاس بالا را بزنید.\n۳. گزینه **Import from Clipboard** را انتخاب کنید.\n۴. پروفایل ایجاد شده را انتخاب کرده و آیکون اتصال پایین را بزنید. ⚡`, {
-            reply_markup: { inline_keyboard: [[{ text: "🔙 بازگشت به منو", callback_data: "guide_android" }]] }
-          });
-          return new Response("OK");
-        }
-
-        if (data === "learn_v2rayn") {
-          await answerCallbackQuery(callbackId);
-          await editMessageText(chatId, messageId, `📖 **آموزش اتصال با v2rayN (ویندوز):**\n\n۱. کانفیگ را کپی کنید.\n۲. برنامه را باز کرده و کلیدهای ترکیبی **Ctrl + V** را بزنید تا کانفیگ وارد شود.\n۳. روی کانفیگ راست کلیک کرده و **Set as active server** را بزنید.\n۴. پایین سمت راست ویندوز روی آیکون برنامه راست کلیک کرده و در بخش System Proxy گزینه **Clear system proxy** یا **Global** را انتخاب کنید. 💻`, {
-            reply_markup: { inline_keyboard: [[{ text: "🔙 بازگشت به منو", callback_data: "guide_windows" }]] }
-          });
-          return new Response("OK");
-        }
-
-        if (data === "learn_clash") {
-          await answerCallbackQuery(callbackId);
-          await editMessageText(chatId, messageId, `📖 **آموزش اتصال با Clash Verge (ویندوز/مک):**\n\n۱. کانفیگ را کپی کنید.\n۲. در برنامه به بخش **Profiles** بروید.\n۳. لینک یا متد کانفیگ را وارد کرده و Import را بزنید.\n۴. به بخش Proxies بروید، سرور را انتخاب کنید و گزینه **System Proxy** را در منوی اصلی فعال کنید. ⚙️`, {
-            reply_markup: { inline_keyboard: [[{ text: "🔙 بازگشت به منوی اصلی پلتفرم‌ها", callback_data: "back_to_platforms" }]] }
-          });
-          return new Response("OK");
-        }
-
-        if (data === "learn_shadowrocket" || data === "learn_streisand" || data === "learn_stash") {
-          await answerCallbackQuery(callbackId);
-          await editMessageText(chatId, messageId, `📖 **آموزش اتصال در آیفون (iOS):**\n\n۱. کانفیگ دریافتی را کامل کپی کنید.\n۲. نرم‌افزار مورد نظر را باز کنید؛ معمولاً برنامه به صورت خودکار تشخیص می‌دهد و پیام **Add from Clipboard** باز می‌شود که باید تایید کنید.\n۳. در غیر این صورت، علامت + را زده و نوع را روی Clipboard بگذارید.\n۴. سوئیچ اتصال اصلی بالای برنامه را روشن کنید. 🍏`, {
-            reply_markup: { inline_keyboard: [[{ text: "🔙 بازگشت به منو", callback_data: "guide_ios" }]] }
-          });
-          return new Response("OK");
-        }
-
-        if (data === "check_join") {
-          const isMember = await checkChannelMembership(fromId);
-          if (isMember) {
-            await answerCallbackQuery(callbackId, "دمت گرم، عضویت تایید شد! 🔥");
-            await sendMessage(
-              fromId,
-              "تبریک رفیق! منوی خرید با موفقیت برات باز شد: 🎉",
-              { reply_markup: mainKeyboard }
-            );
-          } else {
-            await answerCallbackQuery(callbackId, "❌ هنوز عضو کانال نشدی داداش کلک نزن!", true);
-          }
-          return new Response("OK");
-        }
-
-        if (fromId !== ADMIN_ID) {
-          await answerCallbackQuery(callbackId, "فقط ادمین اجازه دارد.");
-          return new Response("OK");
-        }
-
-        if (data.startsWith("approve:")) {
-          const [, targetChatId, username] = data.split(":");
-          await answerCallbackQuery(callbackId, "تایید شد");
-          await sendMessage(
-            targetChatId,
-            "⏳ رسید شما تایید شد داداش!\n\n**سرویس شما ساخته خواهد شد، لطفاً کمی صبر کنید...** 🛠️\nهمین‌جا برات فرستاده میشه."
-          );
-          await sendMessage(
-            ADMIN_ID,
-            `تایید انجام شد برای \`${targetChatId}\`\n\nنام کاربری/سرویس پیشنهادی: \`${username}\`\n\nدستور ارسال دستی:\n\`ارسال:${targetChatId}:کانفیگ\``
-          );
-          return new Response("OK");
-        }
-
-        if (data.startsWith("reject:")) {
-          const [, targetChatId] = data.split(":");
-          await answerCallbackQuery(callbackId, "رد شد");
-          await sendMessage(
-            targetChatId,
-            "❌ داداش رسید واریزی شما توسط مدیریت تایید نشد. اگر اشتباهی شده لطفا به پشتیبانی پیام بده یا دوباره رسید درست رو بفرست."
-          );
-          await sendMessage(ADMIN_ID, `رد انجام شد برای \`${targetChatId}\``);
-          return new Response("OK");
-        }
-
-        return new Response("OK");
-      }
-
-      return new Response("OK");
-    } catch (e) {
-      return new Response("OK");
+      // تایید به ادمین
+      await sendMsg(ADMIN_ID, `🚀 کانفیگ دستی شما با موفقیت برای خریدار (${buyerId}) ارسال شد.`);
+      
+      userSessions.delete(ADMIN_ID);
+      userSessions.delete(buyerId);
+      return;
     }
+  }
+
+  const session = userSessions.get(userId);
+  if (!session) return;
+
+  if (session.step === "awaiting_receipt" && msg.photo) {
+    const photo = msg.photo[msg.photo.length - 1].file_id;
+    await handleReceipt(chatId, userId, msg.message_id, photo);
+    return;
+  }
+
+  if (session.step === "awaiting_receipt" && !msg.photo) {
+    await sendMsg(chatId, "⚠️ لطفاً یک تصویر فیش واریزی ارسال کنید.");
+    return;
+  }
+}
+
+async function handleCallback(cb) {
+  const chatId = cb.message.chat.id;
+  const userId = cb.from.id;
+  const messageId = cb.message.message_id;
+  const data = cb.data;
+
+  if (data === "verify_member") {
+    await handleVerifyMember(chatId, userId, messageId);
+    return;
+  }
+
+  if (data === "buy_new") {
+    await handleBuyNew(chatId, userId, messageId);
+    return;
+  }
+
+  if (data === "back_main") {
+    userSessions.set(userId, { step: "main_menu" });
+    await editMsg(chatId, messageId, "🎉 به ربات خوش آمدید!", keyboards.mainMenu());
+    await answerCb(cb.id);
+    return;
+  }
+
+  if (data === "type_normal" || data === "type_static") {
+    const type = data === "type_normal" ? "normal" : "static";
+    await handleServiceType(chatId, userId, messageId, type);
+    await answerCb(cb.id);
+    return;
+  }
+
+  if (data.startsWith("loc_")) {
+    const location = data.slice(4);
+    await handleLocation(chatId, userId, messageId, location);
+    await answerCb(cb.id);
+    return;
+  }
+
+  if (data.startsWith("vol_")) {
+    const volume = data.slice(4);
+    await handleVolume(chatId, userId, messageId, volume);
+    await answerCb(cb.id);
+    return;
+  }
+
+  if (data.startsWith("ap:")) {
+    if (userId !== ADMIN_ID) {
+      await answerCb(cb.id, "⚠️ فقط ادمین می‌تواند سرویس را تایید کند.");
+      return;
+    }
+    const parts = data.split(":");
+    const buyerId = parseInt(parts[1], 10);
+    const serviceName = decodeURIComponent(parts[2]);
+    
+    await handleApprove(chatId, messageId, buyerId, serviceName);
+    await answerCb(cb.id);
+    return;
+  }
+
+  if (data.startsWith("rj_")) {
+    const buyerId = parseInt(data.slice(3), 10);
+    if (userId !== ADMIN_ID) {
+      await answerCb(cb.id, "⚠️ فقط ادمین می‌تواند سرویس را رد کند.");
+      return;
+    }
+    await handleReject(chatId, messageId, buyerId);
+    await answerCb(cb.id);
+    return;
+  }
+
+  await answerCb(cb.id);
+}
+
+async function setWebhook() {
+  const url = `https://${WORKER_DOMAIN}/`;
+  const res = await api("setWebhook", { url, allowed_updates: ["message", "callback_query"] });
+  return res;
+}
+
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/setWebhook") {
+      const result = await setWebhook();
+      return new Response(JSON.stringify(result, null, 2), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (url.pathname === "/" && request.method === "GET") {
+      return new Response("Silent VPN Bot is running.", { status: 200 });
+    }
+
+    if (request.method === "POST") {
+      try {
+        const update = await request.json();
+
+        if (update.message) {
+          await handleMessage(update.message);
+        } else if (update.callback_query) {
+          await handleCallback(update.callback_query);
+        }
+
+        return new Response("OK", { status: 200 });
+      } catch (err) {
+        console.error("Error:", err);
+        return new Response("Error", { status: 500 });
+      }
+    }
+
+    return new Response("Not Found", { status: 404 });
   },
 };
